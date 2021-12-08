@@ -108,7 +108,7 @@ void wifi_init_softap(wifi_mode_t mode)
 {
     /* default event loop from esp_event library */
     ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    // ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     AP_netif = esp_netif_create_default_wifi_ap();
     assert(AP_netif);
@@ -199,6 +199,9 @@ void wifi_init_sta(wifi_mode_t mode)
     snprintf((char*)wifi_config.sta.ssid, 32, "%s", ESP_WIFI_SSID);
     snprintf((char*)wifi_config.sta.password, 64, "%s", ESP_WIFI_PASS);
 
+    ESP_LOGI(TAG, "ESP_WIFI_SSID: %s", wifi_config.sta.ssid);
+    ESP_LOGI(TAG, "ESP_WIFI_PASS: %s", wifi_config.sta.password);
+
     ESP_ERROR_CHECK(esp_wifi_set_mode(mode));
     // "esp_wifi_set_config" can be called only when specified interface is enabled, otherwise, API fail
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config) );
@@ -261,8 +264,8 @@ void app_wifi_main(void)
     if (strlen(ESP_WIFI_AP_SSID) && strlen(ESP_WIFI_SSID)) {
         mode = WIFI_MODE_APSTA;
         ESP_LOGI(TAG, "Wifi mode is set to WIFI_MODE_APSTA");
-        wifi_init_softap(mode);
         wifi_init_sta(mode);
+        // wifi_init_softap(mode);
     } else if (strlen(ESP_WIFI_AP_SSID)) {
         mode = WIFI_MODE_AP;
         ESP_LOGI(TAG, "Wifi mode is set to WIFI_MODE_AP");

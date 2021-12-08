@@ -115,12 +115,17 @@ void app_camera_main(void)
         ESP_LOGE(TAG, "Camera init failed with error 0x%x", err);
         return;
     }
+    else
+    {
+        ESP_LOGE(TAG, "Camera init successfully\r\n");
+    }
 
     sensor_t * s = esp_camera_sensor_get();
     s->set_vflip(s, 1); // flip it back
     // initial sensors are flipped vertically and colors are a bit saturated
-    if (s->id.PID == OV3660_PID) {
+    if (s->id.PID == OV2640_PID) {
         s->set_brightness(s, 1); // up the blightness just a bit
         s->set_saturation(s, -2); // lower the saturation
+        ESP_LOGE(TAG, "Camera OV2640 detected!!!\r\n");
     }
 }

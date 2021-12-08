@@ -8,13 +8,13 @@ menu "WiFi Settings"
 
     config ESP_WIFI_SSID
         string "WiFi STA SSID"
-        default ""
+        default "Anh Nhan"
         help
         WiFi SSID (network name) to connect to or empty for Off.
 
     config ESP_WIFI_PASSWORD
         string "WiFi STA Password"
-        default ""
+        default "0905866086"
         help
         WiFi Password if WEP/WPA/WPA2 or empty if Open.
         
@@ -26,7 +26,7 @@ menu "WiFi Settings"
 
     config ESP_WIFI_AP_PASSWORD
         string "WiFi AP Password"
-        default ""
+        default "12345678"
         help
         AP password for WPA2 or empty for Open.
 

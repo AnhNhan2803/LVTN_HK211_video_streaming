@@ -705,6 +705,7 @@ static esp_err_t index_handler(httpd_req_t *req)
     static char json_response[1024];
     
     sensor_t *s = esp_camera_sensor_get();
+
     char *p = json_response;
 
     *p++ = '{';
@@ -843,6 +844,10 @@ void app_httpd_main()
         httpd_register_uri_handler(camera_httpd, &mdns_uri);
         httpd_register_uri_handler(camera_httpd, &monitor_uri);
     }
+    else
+    {
+        ESP_LOGI(TAG, "Fail to start web server on port: '%d'", config.server_port);
+    }
 
     httpd_uri_t stream_uri = {
         .uri = "/stream",
@@ -857,5 +862,9 @@ void app_httpd_main()
     if (httpd_start(&stream_httpd, &config) == ESP_OK)
     {
         httpd_register_uri_handler(stream_httpd, &stream_uri);
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Fail to start start stream server on port: '%d'", config.server_port);
     }
 }

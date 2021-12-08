@@ -26,5 +26,6 @@ void app_main()
   {
     vTaskDelay(10 / portTICK_PERIOD_MS);
   }
+  
   ESP_LOGI(TAG, "Main application execution has completed.");
 }
