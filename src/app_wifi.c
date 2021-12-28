@@ -62,6 +62,18 @@ static EventGroupHandle_t s_wifi_event_group;
  * - we failed to connect after the maximum amount of retries */
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define WIFI_MAX_AVAILABLE_APS 50
+#define WIFI_MAX_CHARACTER_LEN 33
+
+
+typedef struct {
+    int8_t rssi;
+    uint8_t ssid[WIFI_MAX_CHARACTER_LEN];
+} wifi_ap_t;
+typedef struct {
+    uint8_t num_aps;
+    wifi_ap_t wifi_aps[WIFI_MAX_AVAILABLE_APS];
+} wifi_ap_results_t;
 
 static const char *TAG = "App_Wifi";
 
@@ -69,6 +81,7 @@ static int s_retry_num = 0;
 
 esp_netif_t *AP_netif;
 esp_netif_t *STA_netif;
+wifi_ap_results_t wifi_ap_results;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -239,10 +252,13 @@ void wifi_init_sta(wifi_mode_t mode)
     vEventGroupDelete(s_wifi_event_group);
 }
 
+
+
 void app_wifi_main(void)
 {
     //Initialize NVS
     esp_err_t ret = nvs_flash_init();
+
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
       ESP_ERROR_CHECK(nvs_flash_erase());
       ret = nvs_flash_init();
@@ -257,7 +273,94 @@ void app_wifi_main(void)
     /* esp_wifi_init API must be called before all other WiFi API can be called */
     ESP_LOGI(TAG, "Initializing ESP Wifi");
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    
+
+    // Start scan all available APs
+    ESP_ERROR_CHECK(esp_wifi_stop());
+    ESP_ERROR_CHECK(esp_wifi_set_mode (WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    // Reset all parameters incase being disconnected
+    wifi_ap_results.num_aps = 0;
+    for(int ch_idx = 0; ch_idx < 14; ch_idx++)
+    {
+        wifi_scan_config_t scan_config = {
+            .ssid = NULL,
+            .bssid = NULL,
+            .channel = ch_idx,
+            .show_hidden = true,
+            .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+            .scan_time.active.min = 10,
+            .scan_time.active.max = 500        
+        };
+
+        ESP_LOGI(TAG, "Start Scan");
+        ESP_ERROR_CHECK(esp_wifi_scan_start(&scan_config, true));
+
+        // Scan all available APs
+        uint16_t apCount = 0;
+        esp_wifi_scan_get_ap_num(&apCount);
+        ESP_LOGI(TAG, "Number of access points found: %d", apCount);
+        if (apCount > 0) 
+        {
+            wifi_ap_record_t *list = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * apCount);
+            ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&apCount, list));
+            int i;
+            ESP_LOGI(TAG, "======================================================================");
+            ESP_LOGI(TAG, "             SSID             |    RSSI    |           AUTH           ");
+            ESP_LOGI(TAG, "======================================================================");
+            for (i=0; i<apCount; i++) {
+                char *authmode;
+                switch(list[i].authmode) {
+                case WIFI_AUTH_OPEN:
+                    authmode = "WIFI_AUTH_OPEN";
+                    break;
+                case WIFI_AUTH_WEP:
+                    authmode = "WIFI_AUTH_WEP";
+                    break;           
+                case WIFI_AUTH_WPA_PSK:
+                    authmode = "WIFI_AUTH_WPA_PSK";
+                    break;           
+                case WIFI_AUTH_WPA2_PSK:
+                    authmode = "WIFI_AUTH_WPA2_PSK";
+                    break;           
+                case WIFI_AUTH_WPA_WPA2_PSK:
+                    authmode = "WIFI_AUTH_WPA_WPA2_PSK";
+                    break;
+                default:
+                    authmode = "Unknown";
+                    break;
+                }
+                ESP_LOGI(TAG, "%26.26s    |    % 4d    |    %22.22s",list[i].ssid, list[i].rssi, authmode);
+
+                // Append all available APs to send to the MCU
+                if(strlen((char *)list[i].ssid) < WIFI_MAX_CHARACTER_LEN) {
+                    wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].rssi = list[i].rssi;
+                    memcpy(wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].ssid, list[i].ssid, strlen((char *) list[i].ssid)); 
+                    ESP_LOGI(TAG, "Append Wifi AP - %s\r\n", wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].ssid);
+                    wifi_ap_results.num_aps++;
+                }
+            }
+            free(list);   
+        }
+    }
+
+    ESP_ERROR_CHECK(esp_wifi_stop());    
+
+    // Send the scanned APs to MCU and wait for response
+    /*
+    "======================================================================"
+    "      HEADER 1   | HEADER 2  |    LENGTH    |  RSSI |     SSID         "
+    "======================================================================"
+    */
+   for (uint8_t idx=0; idx<wifi_ap_results.num_aps; idx++)
+    {
+        // Send to UART here
+        
+    }
+
+    // wait for response here
+
+
     wifi_mode_t mode;
     mode = WIFI_MODE_NULL;
 
