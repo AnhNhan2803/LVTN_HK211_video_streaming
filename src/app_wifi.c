@@ -21,7 +21,7 @@
  */
 
 #include <string.h>
-
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -62,26 +62,40 @@ static EventGroupHandle_t s_wifi_event_group;
  * - we failed to connect after the maximum amount of retries */
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
-#define WIFI_MAX_AVAILABLE_APS 50
-#define WIFI_MAX_CHARACTER_LEN 33
-
 
 typedef struct {
     int8_t rssi;
+    uint8_t ssid_length;
+    uint8_t ssid_idx;
     uint8_t ssid[WIFI_MAX_CHARACTER_LEN];
+    uint8_t pass[2 * WIFI_MAX_CHARACTER_LEN];
 } wifi_ap_t;
+
+uint8_t sta_ssid[WIFI_MAX_CHARACTER_LEN];
+uint8_t sta_pass[2 * WIFI_MAX_CHARACTER_LEN];
+uint8_t sta_ip[WIFI_MAX_IP_LEN];
+
 typedef struct {
     uint8_t num_aps;
     wifi_ap_t wifi_aps[WIFI_MAX_AVAILABLE_APS];
 } wifi_ap_results_t;
 
 static const char *TAG = "App_Wifi";
-
+static bool is_connect_wifi = false;
 static int s_retry_num = 0;
 
 esp_netif_t *AP_netif;
 esp_netif_t *STA_netif;
+// Set up parameters for Wifi APs get list
 wifi_ap_results_t wifi_ap_results;
+// Set up parameters for UART communication
+uart_config_t uart_config = {
+    .baud_rate = 115200,
+    .data_bits = UART_DATA_8_BITS,
+    .parity    = UART_PARITY_DISABLE,
+    .stop_bits = UART_STOP_BITS_1,
+    .flow_ctrl = UART_HW_FLOWCTRL_DISABLE
+};
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -99,10 +113,26 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        ESP_ERROR_CHECK(esp_wifi_connect());
+        if(esp_wifi_connect() == ESP_OK)
+        {
+            is_connect_wifi = true;
+        }
+        else
+        {
+            ESP_LOGI(TAG,"Fail to connect to WIFI - line 124\r\n");
+            is_connect_wifi = false;
+        }
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry_num < ESP_MAXIMUM_RETRY) {
-            ESP_ERROR_CHECK(esp_wifi_connect());
+            if(esp_wifi_connect() == ESP_OK)
+            {
+                is_connect_wifi = true;
+            }
+            else
+            {
+                ESP_LOGI(TAG,"Fail to connect to WIFI - line 136\r\n");
+                is_connect_wifi = false;
+            }            
             s_retry_num++;
             ESP_LOGI(TAG, "retry to connect to the AP");
         } else {
@@ -112,6 +142,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Got IP:" IPSTR, IP2STR(&event->ip_info.ip));
+
+        // Store the local IP
+        memset(sta_ip, 0, sizeof(sta_ip));
+        snprintf((char *)sta_ip, sizeof(sta_ip), "http://%d.%d.%d.%d", (((event->ip_info.ip.addr)) & (0xFF)), (((event->ip_info.ip.addr) >> 8) & (0xFF)),
+                            (((event->ip_info.ip.addr) >> 16) & (0xFF)), (((event->ip_info.ip.addr) >> 24) & (0xFF)));
+        ESP_LOGI(TAG, "COPY LOCAL IP: %s\r\n", sta_ip);          
+
         s_retry_num = 0;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
     }
@@ -240,7 +277,7 @@ void wifi_init_sta(wifi_mode_t mode)
                  AP_info.ssid, AP_info.primary, AP_info.rssi, AP_info.authmode);
     } else if (bits & WIFI_FAIL_BIT) {
         ESP_LOGI(TAG, "Failed to connect to SSID : %s, password : %s",
-                 ESP_WIFI_SSID, ESP_WIFI_PASS);
+                 sta_ssid, sta_pass);
     } else {
         ESP_LOGE(TAG, "UNEXPECTED EVENT");
     }
@@ -252,27 +289,219 @@ void wifi_init_sta(wifi_mode_t mode)
     vEventGroupDelete(s_wifi_event_group);
 }
 
-
-
-void app_wifi_main(void)
+// A task to manage esp communication
+static void esp_com_task(void * arg)
 {
-    //Initialize NVS
-    esp_err_t ret = nvs_flash_init();
+    int len;
+    uint8_t data [BUF_SIZE];
+    uint8_t tx_packet[30];
+    tx_packet[0] = ESP_CMD_HEADER1;
+    tx_packet[1] = ESP_CMD_HEADER2;
+    uint8_t retry_cnt;
 
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-      ESP_ERROR_CHECK(nvs_flash_erase());
-      ret = nvs_flash_init();
+    /*
+    "============================================================================"
+    "      HEADER 1   | HEADER 2  |    LENGTH   | CMD |            DATA          "
+    "============================================================================"
+    */
+    while(1)
+    {   
+        len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
+
+        // Check the reponse payload from MCU
+        if((data[0] == ESP_CMD_HEADER1) && (data[1] == ESP_CMD_HEADER2))
+        {
+            switch(data[3])
+            {
+                case ESP_CMD_CONNECT:
+                    if (!is_connect_wifi)
+                    {
+                        app_wifi_establish_connection();
+                        vTaskDelay(500 / portTICK_RATE_MS);
+                        is_connect_wifi = true;
+                    }
+
+                    // Send response
+                    tx_packet[2] = ESP_CMD_SIZE + 1;
+                    tx_packet[3] = ESP_CMD_CONNECT;
+                    if(is_connect_wifi)
+                    {
+                        tx_packet[4] = 0x01;
+                    }
+                    else
+                    {
+                        tx_packet[4] = 0x00;
+                    }
+                    uart_write_bytes(UART_NUM_0, (const char *)tx_packet, ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + 1);
+                    uart_wait_tx_done(UART_NUM_0, 500);
+                    break;
+
+                case ESP_CMD_DISCONNECT:
+                    if(is_connect_wifi)
+                    {
+                        if(esp_wifi_disconnect() == ESP_OK)
+                        {
+                            is_connect_wifi = false;
+                        }
+                        else
+                        {
+                            ESP_LOGI(TAG,"Fail to disconnect to WIFI\r\n");
+                            is_connect_wifi = true;
+                        }    
+                    }
+
+                    // Send response
+                    tx_packet[2] = ESP_CMD_SIZE + 1;
+                    tx_packet[3] = ESP_CMD_DISCONNECT;
+                    if(!is_connect_wifi)
+                    {
+                        tx_packet[4] = 0x01;
+                    }
+                    else
+                    {
+                        tx_packet[4] = 0x00;
+                    }
+                    uart_write_bytes(UART_NUM_0, (const char *)tx_packet, ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + 1);
+                    uart_wait_tx_done(UART_NUM_0, 500);
+                    break;
+
+                case ESP_CMD_GET_AVAILABLE_SSID:
+                    app_wifi_scan_aps();
+                    break;
+
+                case ESP_CMD_SET_SSID:
+                    uart_flush(UART_NUM_0);
+                    memcpy(sta_ssid, wifi_ap_results.wifi_aps[data[4]].ssid, wifi_ap_results.wifi_aps[data[4]].ssid_length);
+                    memcpy(sta_pass, &data[5], data[2] - ESP_SSID_IDX_SIZE - ESP_CMD_SIZE);
+                    ESP_LOGI(TAG, "Receive Accepted SSID: %s\r\n", sta_ssid);
+                    ESP_LOGI(TAG, "Receive Accepted PASSWORD: %s\r\n", sta_pass);
+                    
+                    // Clear all parameters related to wifi scanning
+                    memset(&wifi_ap_results, 0, sizeof(wifi_ap_results));
+
+                    // Send response
+                    tx_packet[2] = ESP_CMD_SIZE + 1;
+                    tx_packet[3] = ESP_CMD_SET_SSID;
+                    tx_packet[4] = 0x01;
+                    uart_write_bytes(UART_NUM_0, (const char *)tx_packet, ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + 1);
+                    uart_wait_tx_done(UART_NUM_0, 500);                    
+                    break;
+
+                case ESP_CMD_GET_IP:
+                    retry_cnt = 30;
+                    while(retry_cnt > 0)
+                    {
+                        retry_cnt--;
+                        if(sta_ip[0] != 0)
+                        {
+                            break;
+                        }
+
+                        vTaskDelay(100 / portTICK_RATE_MS);
+                    }
+
+                    if(sta_ip[0] != 0)
+                    {
+                        tx_packet[2] = ESP_CMD_SIZE + strlen((char *)sta_ip);
+                    }
+                    else
+                    {
+                        tx_packet[4] = 0x00;
+                        tx_packet[2] = ESP_CMD_SIZE + 1;
+                    }
+
+                    // Send response
+                    tx_packet[3] = ESP_CMD_GET_IP;
+                    
+                    // Send back local id
+                    uart_write_bytes(UART_NUM_0, (const char *)tx_packet, ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE +  tx_packet[2]);
+                    uart_wait_tx_done(UART_NUM_0, 500);
+                    break;
+
+                case ESP_CMD_GET_RSSI:
+                    break;
+
+                case ESP_CMD_RESPONSE_ACK:
+                    break;
+
+                default:
+                    break;
+            }
+            // memset(data, 0, sizeof(data));
+            // uart_flush(UART_NUM_0);
+            // ESP_LOGI(TAG, "Receive ACK: %s\r\n", data);
+            // break;
+        }
+        else
+        {
+            // uart_write_bytes(UART_NUM_0, (const char *) "FAIL ACK", strlen("FAIL ACK"));
+        }
+
+        memset(data, 0, sizeof(data));
+        vTaskDelay(20 / portTICK_RATE_MS);
     }
-    ESP_ERROR_CHECK(ret);
+}
 
-    /* Always use WIFI_INIT_CONFIG_DEFAULT macro to init the config to default values, 
-     * this can guarantee all the fields got correct value when more fields are added 
-     * into wifi_init_config_t in future release. */
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+void app_wifi_set_ssid(void)
+{
+    uint8_t data [BUF_SIZE];
+    uint8_t tx_packet[30];
+    int len;
+    tx_packet[0] = ESP_CMD_HEADER1;
+    tx_packet[1] = ESP_CMD_HEADER2;
 
-    /* esp_wifi_init API must be called before all other WiFi API can be called */
-    ESP_LOGI(TAG, "Initializing ESP Wifi");
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    // wait for response here from MCU to choose the Wifi network
+    /*
+    "================================================================================="
+    "      HEADER 1   | HEADER 2  |    LENGTH   | CMD |  SSID INDEX  |   SSID_PASS    "
+    "================================================================================="
+    */
+    while (1) 
+    {
+        len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
+
+        // Check received header
+        if((data[0] == ESP_CMD_HEADER1) && (data[1] == ESP_CMD_HEADER2) && (data[3] == ESP_CMD_SET_SSID))
+        {
+            uart_flush(UART_NUM_0);
+            memcpy(sta_ssid, wifi_ap_results.wifi_aps[data[4]].ssid, wifi_ap_results.wifi_aps[data[4]].ssid_length);
+            memcpy(sta_pass, &data[5], data[2] - ESP_SSID_IDX_SIZE - ESP_CMD_SIZE);
+            ESP_LOGI(TAG, "Receive Accepted SSID: %s\r\n", sta_ssid);
+            ESP_LOGI(TAG, "Receive Accepted PASSWORD: %s\r\n", sta_pass);
+            
+            // Clear all parameters related to wifi scanning
+            memset(data, 0, sizeof(data));
+            memset(&wifi_ap_results, 0, sizeof(wifi_ap_results));
+
+            // Send response
+            tx_packet[2] = ESP_CMD_SIZE + 1;
+            tx_packet[3] = ESP_CMD_SET_SSID;
+            tx_packet[4] = 0x01;
+            uart_write_bytes(UART_NUM_0, (const char *)tx_packet, ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + 1);
+            uart_wait_tx_done(UART_NUM_0, 500);
+            break;
+        }
+        else
+        {
+
+        }
+    }
+}
+
+void app_wifi_scan_aps(void)
+{
+    if(is_connect_wifi)
+    {
+        if(esp_wifi_disconnect() == ESP_OK)
+        {
+            is_connect_wifi = false;
+        }
+        else
+        {
+            ESP_LOGI(TAG,"Fail to disconnect to WIFI\r\n");
+            is_connect_wifi = true;
+        }    
+    }
 
     // Start scan all available APs
     ESP_ERROR_CHECK(esp_wifi_stop());
@@ -335,6 +564,8 @@ void app_wifi_main(void)
                 // Append all available APs to send to the MCU
                 if(strlen((char *)list[i].ssid) < WIFI_MAX_CHARACTER_LEN) {
                     wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].rssi = list[i].rssi;
+                    wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].ssid_idx = wifi_ap_results.num_aps;
+                    wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].ssid_length = strlen((char *) list[i].ssid);
                     memcpy(wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].ssid, list[i].ssid, strlen((char *) list[i].ssid)); 
                     ESP_LOGI(TAG, "Append Wifi AP - %s\r\n", wifi_ap_results.wifi_aps[wifi_ap_results.num_aps].ssid);
                     wifi_ap_results.num_aps++;
@@ -346,21 +577,62 @@ void app_wifi_main(void)
 
     ESP_ERROR_CHECK(esp_wifi_stop());    
 
+    uint8_t data [BUF_SIZE];
+    uint8_t tx_packet[30];
+    int len;
+    tx_packet[0] = ESP_CMD_HEADER1;
+    tx_packet[1] = ESP_CMD_HEADER2;
+
+    // uint8_t retry_cnt;
+
     // Send the scanned APs to MCU and wait for response
     /*
-    "======================================================================"
-    "      HEADER 1   | HEADER 2  |    LENGTH    |  RSSI |     SSID         "
-    "======================================================================"
+    "============================================================================"
+    "      HEADER 1   | HEADER 2  |    LENGTH   | CMD | SSID INDEX |     SSID    "
+    "============================================================================"
     */
-   for (uint8_t idx=0; idx<wifi_ap_results.num_aps; idx++)
+    for (uint8_t idx=0; idx<wifi_ap_results.num_aps; idx++)
     {
+        // retry_cnt = 3;
         // Send to UART here
-        
+        // retry_cnt--;
+        // Write data back to the UART
+        if (wifi_ap_results.wifi_aps[idx].ssid_length <= ESP_SSID_MAX_LEN)
+        {
+            tx_packet[2] = wifi_ap_results.wifi_aps[idx].ssid_length + ESP_SSID_IDX_SIZE + ESP_CMD_SIZE;
+            tx_packet[3] = ESP_CMD_GET_AVAILABLE_SSID;
+            tx_packet[4] = wifi_ap_results.wifi_aps[idx].ssid_idx;
+            memcpy(&tx_packet[5], wifi_ap_results.wifi_aps[idx].ssid, wifi_ap_results.wifi_aps[idx].ssid_length);
+            uart_write_bytes(UART_NUM_0, (const char *)tx_packet, wifi_ap_results.wifi_aps[idx].ssid_length + 
+                                    ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + ESP_SSID_IDX_SIZE);
+            uart_wait_tx_done(UART_NUM_0, 500);
+            // ESP_LOGI(TAG, "ESP_WIFI_SSID: %s", wifi_ap_results.wifi_aps[idx].ssid);
+
+            // Read data from the UART
+            while (1) 
+            {
+                len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
+
+                // Check the reponse payload from MCU
+                if((data[0] == ESP_CMD_HEADER1) && (data[1] == ESP_CMD_HEADER2) && (data[3] == ESP_CMD_RESPONSE_ACK))
+                {
+                    memset(data, 0, sizeof(data));
+                    uart_flush(UART_NUM_0);
+                    // ESP_LOGI(TAG, "Receive ACK: %s\r\n", data);
+                    break;
+                }
+                else
+                {
+                    // uart_write_bytes(UART_NUM_0, (const char *) "FAIL ACK", strlen("FAIL ACK"));
+                }
+            }
+        }
     }
+}
 
-    // wait for response here
 
-
+void app_wifi_establish_connection(void)
+{
     wifi_mode_t mode;
     mode = WIFI_MODE_NULL;
 
@@ -385,4 +657,39 @@ void app_wifi_main(void)
     }
 
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE)); // Set current WiFi power save type.
+}
+
+
+void app_wifi_main_init(void)
+{
+    //Initialize NVS
+    esp_err_t ret = nvs_flash_init();
+    // uart_driver_install();
+
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    // Init UART parameters
+    uart_param_config(UART_NUM_0, &uart_config);
+    uart_set_pin(UART_NUM_0, ESP_UART_TXD, ESP_UART_RXD, ESP_UART_RTS, ESP_UART_CTS);
+    uart_driver_install(UART_NUM_0, BUF_SIZE * 2, 0, 0, NULL, 0);
+
+    /* Always use WIFI_INIT_CONFIG_DEFAULT macro to init the config to default values, 
+     * this can guarantee all the fields got correct value when more fields are added 
+     * into wifi_init_config_t in future release. */
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+
+    /* esp_wifi_init API must be called before all other WiFi API can be called */
+    ESP_LOGI(TAG, "Initializing ESP Wifi");
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    // Scan for the available network at the initialization phase
+    app_wifi_scan_aps();
+    app_wifi_set_ssid();
+    app_wifi_establish_connection();
+
+    xTaskCreate(esp_com_task, "eso-com-task", 4096, NULL, 2, NULL);
 }

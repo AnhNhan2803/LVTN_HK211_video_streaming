@@ -25,6 +25,7 @@
 #define _APP_WIFI_H_
 
 #include "esp_netif.h"
+#include "driver/uart.h"
 
 extern esp_netif_t *AP_netif;
 extern esp_netif_t *STA_netif;
@@ -33,7 +34,41 @@ extern esp_netif_t *STA_netif;
 extern "C" {
 #endif
 
-void app_wifi_main(void);
+#define ESP_SSID_MAX_LEN                (25)
+#define ESP_SSID_IDX_SIZE               (1)
+#define ESP_CMD_SIZE                    (1)
+#define ESP_CMD_HEADER_SIZE             (2)
+#define ESP_CMD_PAYLOAD_LEN_SIZE        (1)
+
+#define ESP_CMD_HEADER1                 (0xAB)
+#define ESP_CMD_HEADER2                 (0xBA)
+
+#define WIFI_MAX_AVAILABLE_APS  (50)
+#define WIFI_MAX_CHARACTER_LEN  (32)
+#define BUF_SIZE (1024)
+#define WIFI_MAX_IP_LEN         (30)
+
+#define ESP_UART_TXD  (1)
+#define ESP_UART_RXD  (3)
+#define ESP_UART_RTS  (UART_PIN_NO_CHANGE)
+#define ESP_UART_CTS  (UART_PIN_NO_CHANGE)
+
+
+#define ESP_CMD_CONNECT                 (0xA0)
+#define ESP_CMD_DISCONNECT              (0xA1)
+#define ESP_CMD_GET_AVAILABLE_SSID      (0xA2)
+#define ESP_CMD_SET_SSID                (0xA3)
+#define ESP_CMD_GET_IP                  (0xA4)
+#define ESP_CMD_GET_RSSI                (0xA5)
+
+#define ESP_CMD_RESPONSE_ACK            (0xB0)
+
+
+
+void app_wifi_main_init(void);
+void app_wifi_establish_connection(void);
+void app_wifi_scan_aps(void);
+void app_wifi_set_ssid(void);
 
 #ifdef __cplusplus
 }
