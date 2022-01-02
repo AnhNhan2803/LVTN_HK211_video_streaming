@@ -82,6 +82,8 @@ typedef struct {
 
 static const char *TAG = "App_Wifi";
 static bool is_connect_wifi = false;
+static bool wifi_init_complete = false;
+
 static int s_retry_num = 0;
 
 esp_netif_t *AP_netif;
@@ -334,6 +336,10 @@ static void esp_com_task(void * arg)
                     }
                     uart_write_bytes(UART_NUM_0, (const char *)tx_packet, ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + 1);
                     uart_wait_tx_done(UART_NUM_0, 500);
+                    if(!wifi_init_complete)
+                    {
+                        wifi_init_complete = true;
+                    }
                     break;
 
                 case ESP_CMD_DISCONNECT:
@@ -402,6 +408,7 @@ static void esp_com_task(void * arg)
 
                     if(sta_ip[0] != 0)
                     {
+                        tx_packet[4] = 0x01;
                         tx_packet[2] = ESP_CMD_SIZE + strlen((char *)sta_ip);
                     }
                     else
@@ -591,42 +598,61 @@ void app_wifi_scan_aps(void)
     "      HEADER 1   | HEADER 2  |    LENGTH   | CMD | SSID INDEX |     SSID    "
     "============================================================================"
     */
-    for (uint8_t idx=0; idx<wifi_ap_results.num_aps; idx++)
+    if(wifi_ap_results.num_aps > 0)
     {
-        // retry_cnt = 3;
-        // Send to UART here
-        // retry_cnt--;
-        // Write data back to the UART
-        if (wifi_ap_results.wifi_aps[idx].ssid_length <= ESP_SSID_MAX_LEN)
+        for (uint8_t idx=0; idx<wifi_ap_results.num_aps; idx++)
         {
-            tx_packet[2] = wifi_ap_results.wifi_aps[idx].ssid_length + ESP_SSID_IDX_SIZE + ESP_CMD_SIZE;
-            tx_packet[3] = ESP_CMD_GET_AVAILABLE_SSID;
-            tx_packet[4] = wifi_ap_results.wifi_aps[idx].ssid_idx;
-            memcpy(&tx_packet[5], wifi_ap_results.wifi_aps[idx].ssid, wifi_ap_results.wifi_aps[idx].ssid_length);
-            uart_write_bytes(UART_NUM_0, (const char *)tx_packet, wifi_ap_results.wifi_aps[idx].ssid_length + 
-                                    ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + ESP_SSID_IDX_SIZE);
-            uart_wait_tx_done(UART_NUM_0, 500);
-            // ESP_LOGI(TAG, "ESP_WIFI_SSID: %s", wifi_ap_results.wifi_aps[idx].ssid);
-
-            // Read data from the UART
-            while (1) 
+            // retry_cnt = 3;
+            // Send to UART here
+            // retry_cnt--;
+            // Write data back to the UART
+            if (wifi_ap_results.wifi_aps[idx].ssid_length <= ESP_SSID_MAX_LEN)
             {
-                len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
+                tx_packet[2] = wifi_ap_results.wifi_aps[idx].ssid_length + ESP_SSID_IDX_SIZE + ESP_CMD_SIZE + 1;
+                tx_packet[3] = ESP_CMD_GET_AVAILABLE_SSID;
+                tx_packet[4] = 0x01;
+                tx_packet[5] = wifi_ap_results.wifi_aps[idx].ssid_idx;
+                memcpy(&tx_packet[6], wifi_ap_results.wifi_aps[idx].ssid, wifi_ap_results.wifi_aps[idx].ssid_length);
+                uart_write_bytes(UART_NUM_0, (const char *)tx_packet, wifi_ap_results.wifi_aps[idx].ssid_length + 
+                                        ESP_CMD_HEADER_SIZE + ESP_CMD_PAYLOAD_LEN_SIZE + ESP_CMD_SIZE + ESP_SSID_IDX_SIZE + 1);
+                uart_wait_tx_done(UART_NUM_0, 500);
+                // ESP_LOGI(TAG, "ESP_WIFI_SSID: %s", wifi_ap_results.wifi_aps[idx].ssid);
 
-                // Check the reponse payload from MCU
-                if((data[0] == ESP_CMD_HEADER1) && (data[1] == ESP_CMD_HEADER2) && (data[3] == ESP_CMD_RESPONSE_ACK))
+                // Read data from the UART
+                while (1) 
                 {
-                    memset(data, 0, sizeof(data));
-                    uart_flush(UART_NUM_0);
-                    // ESP_LOGI(TAG, "Receive ACK: %s\r\n", data);
-                    break;
-                }
-                else
-                {
-                    // uart_write_bytes(UART_NUM_0, (const char *) "FAIL ACK", strlen("FAIL ACK"));
+                    len = uart_read_bytes(UART_NUM_0, data, BUF_SIZE, 20 / portTICK_RATE_MS);
+
+                    // Check the reponse payload from MCU
+                    if((data[0] == ESP_CMD_HEADER1) && (data[1] == ESP_CMD_HEADER2) && (data[3] == ESP_CMD_RESPONSE_ACK))
+                    {
+                        memset(data, 0, sizeof(data));
+                        uart_flush(UART_NUM_0);
+                        // ESP_LOGI(TAG, "Receive ACK: %s\r\n", data);
+                        break;
+                    }
+                    else
+                    {
+                        // uart_write_bytes(UART_NUM_0, (const char *) "FAIL ACK", strlen("FAIL ACK"));
+                    }
                 }
             }
         }
+
+        // reach the end of the SSID list
+        tx_packet[2] = ESP_CMD_SIZE + 1;
+        tx_packet[3] = ESP_CMD_GET_AVAILABLE_SSID;
+        tx_packet[4] = 0x00;
+        uart_write_bytes(UART_NUM_0, (const char *)tx_packet, 5);
+        uart_wait_tx_done(UART_NUM_0, 500);
+    }
+    else
+    {
+        tx_packet[2] = ESP_CMD_SIZE + 1;
+        tx_packet[3] = ESP_CMD_GET_AVAILABLE_SSID;
+        tx_packet[4] = 0x00;
+        uart_write_bytes(UART_NUM_0, (const char *)tx_packet, 5);
+        uart_wait_tx_done(UART_NUM_0, 500);
     }
 }
 
@@ -687,9 +713,12 @@ void app_wifi_main_init(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     // Scan for the available network at the initialization phase
-    app_wifi_scan_aps();
-    app_wifi_set_ssid();
-    app_wifi_establish_connection();
-
+    // app_wifi_scan_aps();
     xTaskCreate(esp_com_task, "eso-com-task", 4096, NULL, 2, NULL);
+
+    // Wait here untils the the connection estalishment is called
+    while(!wifi_init_complete)
+    {
+        vTaskDelay(20 / portTICK_RATE_MS);
+    }
 }

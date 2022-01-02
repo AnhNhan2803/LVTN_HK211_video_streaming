@@ -34,7 +34,7 @@ extern esp_netif_t *STA_netif;
 extern "C" {
 #endif
 
-#define ESP_SSID_MAX_LEN                (25)
+#define ESP_SSID_MAX_LEN                (24)
 #define ESP_SSID_IDX_SIZE               (1)
 #define ESP_CMD_SIZE                    (1)
 #define ESP_CMD_HEADER_SIZE             (2)
@@ -52,6 +52,8 @@ extern "C" {
 #define ESP_UART_RXD  (3)
 #define ESP_UART_RTS  (UART_PIN_NO_CHANGE)
 #define ESP_UART_CTS  (UART_PIN_NO_CHANGE)
+
+#define ESP_GET_SSID_REACH_THE_END      (0x00)
 
 
 #define ESP_CMD_CONNECT                 (0xA0)
