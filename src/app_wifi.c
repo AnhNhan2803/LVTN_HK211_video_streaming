@@ -409,7 +409,9 @@ static void esp_com_task(void * arg)
                     if(sta_ip[0] != 0)
                     {
                         tx_packet[4] = 0x01;
-                        tx_packet[2] = ESP_CMD_SIZE + strlen((char *)sta_ip);
+                        tx_packet[2] = ESP_CMD_SIZE + 1 + strlen((char *)sta_ip);
+                        memcpy(&tx_packet[5], (char *)sta_ip, strlen((char *)sta_ip));
+                        ESP_LOGI(TAG, "Send Local IP to MCU: %s\r\n", &tx_packet[5]);
                     }
                     else
                     {
