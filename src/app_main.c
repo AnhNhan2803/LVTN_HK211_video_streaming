@@ -16,7 +16,7 @@ static const char *TAG = "APP_Main";
 void app_main()
 {
   // Disable every runtime log output
-  // esp_log_level_set("*", ESP_LOG_NONE);
+  esp_log_level_set("*", ESP_LOG_NONE);
   // ESP_LOGI(TAG, "Starting main application");
   app_camera_main();
   app_wifi_main_init();

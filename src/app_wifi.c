@@ -248,8 +248,8 @@ void wifi_init_sta(wifi_mode_t mode)
         },
     };
     
-    snprintf((char*)wifi_config.sta.ssid, 32, "%s", ESP_WIFI_SSID);
-    snprintf((char*)wifi_config.sta.password, 64, "%s", ESP_WIFI_PASS);
+    snprintf((char*)wifi_config.sta.ssid, 32, "%s", sta_ssid);
+    snprintf((char*)wifi_config.sta.password, 64, "%s", sta_pass);
 
     ESP_LOGI(TAG, "ESP_WIFI_SSID: %s", wifi_config.sta.ssid);
     ESP_LOGI(TAG, "ESP_WIFI_PASS: %s", wifi_config.sta.password);
@@ -318,6 +318,7 @@ static void esp_com_task(void * arg)
                 case ESP_CMD_CONNECT:
                     if (!is_connect_wifi)
                     {
+                        // memset(sta_ip, 0, sizeof(sta_ip));
                         app_wifi_establish_connection();
                         vTaskDelay(500 / portTICK_RATE_MS);
                         is_connect_wifi = true;
@@ -343,6 +344,7 @@ static void esp_com_task(void * arg)
                     break;
 
                 case ESP_CMD_DISCONNECT:
+
                     if(is_connect_wifi)
                     {
                         if(esp_wifi_disconnect() == ESP_OK)
@@ -383,7 +385,7 @@ static void esp_com_task(void * arg)
                     ESP_LOGI(TAG, "Receive Accepted PASSWORD: %s\r\n", sta_pass);
                     
                     // Clear all parameters related to wifi scanning
-                    memset(&wifi_ap_results, 0, sizeof(wifi_ap_results));
+                    // memset(&wifi_ap_results, 0, sizeof(wifi_ap_results));
 
                     // Send response
                     tx_packet[2] = ESP_CMD_SIZE + 1;
@@ -394,17 +396,17 @@ static void esp_com_task(void * arg)
                     break;
 
                 case ESP_CMD_GET_IP:
-                    retry_cnt = 30;
-                    while(retry_cnt > 0)
-                    {
-                        retry_cnt--;
-                        if(sta_ip[0] != 0)
-                        {
-                            break;
-                        }
+                    // retry_cnt = 30;
+                    // while(retry_cnt > 0)
+                    // {
+                    //     retry_cnt--;
+                    //     if(sta_ip[0] != 0)
+                    //     {
+                    //         break;
+                    //     }
 
-                        vTaskDelay(100 / portTICK_RATE_MS);
-                    }
+                    //     vTaskDelay(100 / portTICK_RATE_MS);
+                    // }
 
                     if(sta_ip[0] != 0)
                     {
@@ -518,6 +520,7 @@ void app_wifi_scan_aps(void)
     ESP_ERROR_CHECK(esp_wifi_start());
 
     // Reset all parameters incase being disconnected
+    memset(&wifi_ap_results, 0, sizeof(wifi_ap_results));
     wifi_ap_results.num_aps = 0;
     for(int ch_idx = 0; ch_idx < 14; ch_idx++)
     {
